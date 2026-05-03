@@ -1,0 +1,51 @@
+# grpcurl command list (testing artifact)
+# Prereq: start doctor-service on :50051 and appointment-service on :50052
+
+# 1) Create doctor
+grpcurl -plaintext -d '{
+  "full_name":"Dr. Aisha Seitkali",
+  "specialization":"Cardiology",
+  "email":"a.seitkali@clinic.kz"
+}' localhost:50051 doctor.DoctorService/CreateDoctor
+
+# 2) List doctors
+grpcurl -plaintext -d '{}' localhost:50051 doctor.DoctorService/ListDoctors
+
+# 3) Get doctor by id
+grpcurl -plaintext -d '{"id":"doctor-1"}' localhost:50051 doctor.DoctorService/GetDoctor
+
+# 4) Create appointment
+grpcurl -plaintext -d '{
+  "title":"Initial cardiac consultation",
+  "description":"Patient referred for palpitations and shortness of breath",
+  "doctor_id":"doctor-1"
+}' localhost:50052 appointment.AppointmentService/CreateAppointment
+
+# 5) List appointments
+grpcurl -plaintext -d '{}' localhost:50052 appointment.AppointmentService/ListAppointments
+
+# 6) Get appointment by id
+grpcurl -plaintext -d '{"id":"appointment-1"}' localhost:50052 appointment.AppointmentService/GetAppointment
+
+# 7) Update appointment status -> in_progress
+grpcurl -plaintext -d '{"id":"appointment-1","status":"in_progress"}' localhost:50052 appointment.AppointmentService/UpdateAppointmentStatus
+
+# 8) Update appointment status -> done
+grpcurl -plaintext -d '{"id":"appointment-1","status":"done"}' localhost:50052 appointment.AppointmentService/UpdateAppointmentStatus
+
+# 9) Invalid transition done -> new (expect InvalidArgument)
+grpcurl -plaintext -d '{"id":"appointment-1","status":"new"}' localhost:50052 appointment.AppointmentService/UpdateAppointmentStatus
+
+# 10) Remote doctor missing (expect FailedPrecondition)
+grpcurl -plaintext -d '{
+  "title":"Follow-up visit",
+  "description":"Doctor ID does not exist",
+  "doctor_id":"doctor-999"
+}' localhost:50052 appointment.AppointmentService/CreateAppointment
+
+# 11) Doctor service unavailable (stop doctor-service, then expect Unavailable)
+grpcurl -plaintext -d '{
+  "title":"Emergency consultation",
+  "description":"Doctor service down scenario",
+  "doctor_id":"doctor-1"
+}' localhost:50052 appointment.AppointmentService/CreateAppointment
