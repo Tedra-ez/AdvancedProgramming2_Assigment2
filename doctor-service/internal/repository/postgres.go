@@ -26,7 +26,7 @@ func (r *PostgresDoctorRepository) Create(ctx context.Context, doctor model.Doct
 	}
 
 	const q = `
-INSERT INTO doctors (id, full_name, specialization, email)
+	INSERT INTO doctors (id, full_name, specialization, email)
 VALUES ($1, $2, $3, $4)
 RETURNING id, full_name, specialization, email;
 `
@@ -90,4 +90,3 @@ func (r *PostgresDoctorRepository) ExistsByEmail(ctx context.Context, email stri
 	}
 	return true, nil
 }
-

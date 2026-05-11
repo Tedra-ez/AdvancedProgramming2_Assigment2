@@ -19,10 +19,15 @@ var (
 type DoctorUseCase struct {
 	repo      repository.DoctorRepository
 	publisher port.DoctorEventPublisher
+	cache     port.DoctorCacheRepository
 }
 
-func NewDoctorUseCase(repo repository.DoctorRepository, publisher port.DoctorEventPublisher) *DoctorUseCase {
-	return &DoctorUseCase{repo: repo, publisher: publisher}
+func NewDoctorUseCase(repo repository.DoctorRepository, publisher port.DoctorEventPublisher, caches ...port.DoctorCacheRepository) *DoctorUseCase {
+	var cache port.DoctorCacheRepository = port.NoopDoctorCacheRepository{}
+	if len(caches) > 0 && caches[0] != nil {
+		cache = caches[0]
+	}
+	return &DoctorUseCase{repo: repo, publisher: publisher, cache: cache}
 }
 
 func (u *DoctorUseCase) Create(ctx context.Context, doctor model.Doctor) (model.Doctor, error) {
@@ -47,6 +52,8 @@ func (u *DoctorUseCase) Create(ctx context.Context, doctor model.Doctor) (model.
 		return model.Doctor{}, err
 	}
 
+	u.cache.SetDoctor(ctx, created)
+	u.cache.DeleteDoctorsList(ctx)
 	if u.publisher != nil {
 		_ = u.publisher.PublishDoctorCreated(ctx, created)
 	}
@@ -54,9 +61,25 @@ func (u *DoctorUseCase) Create(ctx context.Context, doctor model.Doctor) (model.
 }
 
 func (u *DoctorUseCase) GetByID(ctx context.Context, id string) (model.Doctor, bool, error) {
-	return u.repo.GetByID(ctx, id)
+	if cached, ok := u.cache.GetDoctor(ctx, id); ok {
+		return cached, true, nil
+	}
+	doctor, ok, err := u.repo.GetByID(ctx, id)
+	if err != nil || !ok {
+		return doctor, ok, err
+	}
+	u.cache.SetDoctor(ctx, doctor)
+	return doctor, true, nil
 }
 
 func (u *DoctorUseCase) List(ctx context.Context) ([]model.Doctor, error) {
-	return u.repo.List(ctx)
+	if cached, ok := u.cache.GetDoctors(ctx); ok {
+		return cached, nil
+	}
+	doctors, err := u.repo.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	u.cache.SetDoctors(ctx, doctors)
+	return doctors, nil
 }

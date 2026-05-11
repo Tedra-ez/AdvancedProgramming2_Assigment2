@@ -25,13 +25,19 @@ type AppointmentUseCase struct {
 	repo         repository.AppointmentRepository
 	doctorClient client.DoctorClient
 	publisher    port.AppointmentEventPublisher
+	cache        port.AppointmentCacheRepository
 }
 
-func NewAppointmentUseCase(repo repository.AppointmentRepository, doctorClient client.DoctorClient, publisher port.AppointmentEventPublisher) *AppointmentUseCase {
+func NewAppointmentUseCase(repo repository.AppointmentRepository, doctorClient client.DoctorClient, publisher port.AppointmentEventPublisher, caches ...port.AppointmentCacheRepository) *AppointmentUseCase {
+	var cache port.AppointmentCacheRepository = port.NoopAppointmentCacheRepository{}
+	if len(caches) > 0 && caches[0] != nil {
+		cache = caches[0]
+	}
 	return &AppointmentUseCase{
 		repo:         repo,
 		doctorClient: doctorClient,
 		publisher:    publisher,
+		cache:        cache,
 	}
 }
 
@@ -57,6 +63,7 @@ func (u *AppointmentUseCase) Create(ctx context.Context, appointment model.Appoi
 		return model.Appointment{}, err
 	}
 
+	u.cache.DeleteAppointmentsList(ctx)
 	if u.publisher != nil {
 		_ = u.publisher.PublishAppointmentCreated(ctx, created)
 	}
@@ -64,11 +71,27 @@ func (u *AppointmentUseCase) Create(ctx context.Context, appointment model.Appoi
 }
 
 func (u *AppointmentUseCase) GetByID(ctx context.Context, id string) (model.Appointment, bool, error) {
-	return u.repo.GetByID(ctx, id)
+	if cached, ok := u.cache.GetAppointment(ctx, id); ok {
+		return cached, true, nil
+	}
+	appointment, ok, err := u.repo.GetByID(ctx, id)
+	if err != nil || !ok {
+		return appointment, ok, err
+	}
+	u.cache.SetAppointment(ctx, appointment)
+	return appointment, true, nil
 }
 
 func (u *AppointmentUseCase) List(ctx context.Context) ([]model.Appointment, error) {
-	return u.repo.List(ctx)
+	if cached, ok := u.cache.GetAppointments(ctx); ok {
+		return cached, nil
+	}
+	appointments, err := u.repo.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	u.cache.SetAppointments(ctx, appointments)
+	return appointments, nil
 }
 
 func (u *AppointmentUseCase) UpdateStatus(ctx context.Context, id string, status model.Status) (model.Appointment, error) {
@@ -103,8 +126,10 @@ func (u *AppointmentUseCase) UpdateStatus(ctx context.Context, id string, status
 		return model.Appointment{}, ErrAppointmentNotFound
 	}
 
+	u.cache.SetAppointment(ctx, updated)
+	u.cache.DeleteAppointmentsList(ctx)
 	if u.publisher != nil {
-		_ = u.publisher.PublishAppointmentStatusUpdated(ctx, updated.ID, oldStatus, updated.Status)
+		_ = u.publisher.PublishAppointmentStatusUpdated(ctx, updated.ID, updated.DoctorID, oldStatus, updated.Status)
 	}
 	return updated, nil
 }

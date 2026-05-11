@@ -1,0 +1,25 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "AP2 Doctor DB",
+      "Group": "AP2 Assignment 3",
+      "Host": "host.docker.internal",
+      "Port": 5543,
+      "MaintenanceDB": "doctor_db",
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "Comment": "Doctor Service database"
+    },
+    "2": {
+      "Name": "AP2 Appointment DB",
+      "Group": "AP2 Assignment 3",
+      "Host": "host.docker.internal",
+      "Port": 5434,
+      "MaintenanceDB": "appointment_db",
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "Comment": "Appointment Service database"
+    }
+  }
+}
+

@@ -2,16 +2,15 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
-	"time"
 
-	"github.com/nats-io/nats.go"
+	"notification-service/internal/jobqueue"
+	eventlogger "notification-service/internal/logger"
+	"notification-service/internal/subscriber"
 )
 
 func main() {
@@ -20,11 +19,16 @@ func main() {
 		log.Fatalf("notification-service: missing NATS_URL")
 	}
 
-	nc, err := connectWithBackoff(natsURL, 6, 1*time.Second)
-	if err != nil {
-		log.Fatalf("notification-service: %v", err)
-	}
-	defer nc.Close()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	queue := jobqueue.New(jobqueue.Config{
+		RedisURL:       os.Getenv("REDIS_URL"),
+		GatewayURL:     gatewayURL(),
+		WorkerPoolSize: workerPoolSize(),
+	})
+	queue.Start(ctx)
+	defer queue.Close()
 
 	subjects := []string{
 		"doctors.created",
@@ -32,72 +36,39 @@ func main() {
 		"appointments.status_updated",
 	}
 
-	for _, subj := range subjects {
-		subj := subj
-		_, err := nc.Subscribe(subj, func(msg *nats.Msg) {
-			var ev map[string]any
-			if err := json.Unmarshal(msg.Data, &ev); err != nil {
-				log.Printf("notification-service: invalid json subject=%s err=%v", subj, err)
-				return
-			}
-			out := map[string]any{
-				"time":    time.Now().UTC().Format(time.RFC3339),
-				"subject": subj,
-				"event":   ev,
-			}
-			b, err := json.Marshal(out)
-			if err != nil {
-				log.Printf("notification-service: marshal log failed subject=%s err=%v", subj, err)
-				return
-			}
-			fmt.Println(string(b))
-		})
+	err := subscriber.Run(ctx, natsURL, subjects, func(subject string, data []byte) {
+		event, err := eventlogger.LogEvent(os.Stdout, subject, data)
 		if err != nil {
-			log.Fatalf("notification-service: subscribe failed subject=%s err=%v", subj, err)
+			log.Printf("notification-service: invalid json subject=%s err=%v", subject, err)
+			return
 		}
-	}
-
-	if err := nc.Flush(); err != nil {
-		log.Fatalf("notification-service: flush failed: %v", err)
-	}
-	if err := nc.LastError(); err != nil {
-		log.Fatalf("notification-service: nats error after subscribe: %v", err)
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	<-ctx.Done()
-
-	drainDone := make(chan struct{})
-	go func() {
-		_ = nc.Drain()
-		close(drainDone)
-	}()
-
-	select {
-	case <-drainDone:
-	case <-time.After(5 * time.Second):
+		if subject == "appointments.status_updated" {
+			queue.EnqueueFromEvent(ctx, event)
+		}
+	})
+	if err != nil {
+		log.Fatalf("notification-service: %v", err)
 	}
 }
 
-func connectWithBackoff(url string, maxAttempts int, initialDelay time.Duration) (*nats.Conn, error) {
-	delay := initialDelay
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		nc, err := nats.Connect(url)
-		if err == nil {
-			return nc, nil
-		}
-		lastErr = err
-		if attempt == maxAttempts {
-			break
-		}
-		time.Sleep(delay)
-		delay *= 2
+func gatewayURL() string {
+	url := os.Getenv("GATEWAY_URL")
+	if url == "" {
+		log.Printf("warning: GATEWAY_URL not set, using http://localhost:8080")
+		return "http://localhost:8080"
 	}
-	if lastErr == nil {
-		lastErr = errors.New("unknown connection error")
+	return url
+}
+
+func workerPoolSize() int {
+	raw := os.Getenv("WORKER_POOL_SIZE")
+	if raw == "" {
+		return 3
 	}
-	return nil, fmt.Errorf("cannot connect to NATS after %d attempts: %w", maxAttempts, lastErr)
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		log.Printf("warning: invalid WORKER_POOL_SIZE=%q, using 3", raw)
+		return 3
+	}
+	return n
 }

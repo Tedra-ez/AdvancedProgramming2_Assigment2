@@ -25,6 +25,7 @@ type AppointmentStatusUpdatedEvent struct {
 	EventType  string `json:"event_type"`
 	OccurredAt string `json:"occurred_at"`
 	ID         string `json:"id"`
+	DoctorID   string `json:"doctor_id"`
 	OldStatus  string `json:"old_status"`
 	NewStatus  string `json:"new_status"`
 }
@@ -62,11 +63,12 @@ func (p *NATSPublisher) PublishAppointmentCreated(ctx context.Context, appointme
 	return nil
 }
 
-func (p *NATSPublisher) PublishAppointmentStatusUpdated(ctx context.Context, id string, oldStatus, newStatus model.Status) error {
+func (p *NATSPublisher) PublishAppointmentStatusUpdated(ctx context.Context, id string, doctorID string, oldStatus, newStatus model.Status) error {
 	ev := AppointmentStatusUpdatedEvent{
 		EventType:  "appointments.status_updated",
 		OccurredAt: time.Now().UTC().Format(time.RFC3339),
 		ID:         id,
+		DoctorID:   doctorID,
 		OldStatus:  string(oldStatus),
 		NewStatus:  string(newStatus),
 	}
@@ -91,4 +93,3 @@ func (p *NATSPublisher) Close() error {
 }
 
 var _ port.AppointmentEventPublisher = (*NATSPublisher)(nil)
-

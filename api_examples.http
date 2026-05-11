@@ -1,5 +1,7 @@
 # grpcurl command list (testing artifact)
-# Prereq: start doctor-service on :50051 and appointment-service on :50052
+# Prereq: start PostgreSQL, NATS, Redis, mock-gateway,
+# doctor-service on :50051, appointment-service on :50052, and notification-service.
+# gRPC reflection is enabled, so these commands work without passing .proto files.
 
 # 1) Create doctor
 grpcurl -plaintext -d '{
@@ -7,34 +9,43 @@ grpcurl -plaintext -d '{
   "specialization":"Cardiology",
   "email":"a.seitkali@clinic.kz"
 }' localhost:50051 doctor.DoctorService/CreateDoctor
+# Copy the returned id, for example: doctor-<uuid>
+# Expected notification-service log subject: doctors.created
 
 # 2) List doctors
 grpcurl -plaintext -d '{}' localhost:50051 doctor.DoctorService/ListDoctors
 
 # 3) Get doctor by id
-grpcurl -plaintext -d '{"id":"doctor-1"}' localhost:50051 doctor.DoctorService/GetDoctor
+grpcurl -plaintext -d '{"id":"PASTE_DOCTOR_ID_HERE"}' localhost:50051 doctor.DoctorService/GetDoctor
+# Call the same command twice to demonstrate a Redis cache hit on the second call.
 
 # 4) Create appointment
 grpcurl -plaintext -d '{
   "title":"Initial cardiac consultation",
   "description":"Patient referred for palpitations and shortness of breath",
-  "doctor_id":"doctor-1"
+  "doctor_id":"PASTE_DOCTOR_ID_HERE"
 }' localhost:50052 appointment.AppointmentService/CreateAppointment
+# Copy the returned id, for example: appointment-<uuid>
+# Expected notification-service log subject: appointments.created
 
 # 5) List appointments
 grpcurl -plaintext -d '{}' localhost:50052 appointment.AppointmentService/ListAppointments
 
 # 6) Get appointment by id
-grpcurl -plaintext -d '{"id":"appointment-1"}' localhost:50052 appointment.AppointmentService/GetAppointment
+grpcurl -plaintext -d '{"id":"PASTE_APPOINTMENT_ID_HERE"}' localhost:50052 appointment.AppointmentService/GetAppointment
 
 # 7) Update appointment status -> in_progress
-grpcurl -plaintext -d '{"id":"appointment-1","status":"in_progress"}' localhost:50052 appointment.AppointmentService/UpdateAppointmentStatus
+grpcurl -plaintext -d '{"id":"PASTE_APPOINTMENT_ID_HERE","status":"in_progress"}' localhost:50052 appointment.AppointmentService/UpdateAppointmentStatus
+# Expected notification-service log subject: appointments.status_updated
 
 # 8) Update appointment status -> done
-grpcurl -plaintext -d '{"id":"appointment-1","status":"done"}' localhost:50052 appointment.AppointmentService/UpdateAppointmentStatus
+grpcurl -plaintext -d '{"id":"PASTE_APPOINTMENT_ID_HERE","status":"done"}' localhost:50052 appointment.AppointmentService/UpdateAppointmentStatus
+# Expected notification-service log subject: appointments.status_updated
+# Expected job queue logs: enqueued -> processing -> success (or retry -> success if the gateway returns 503)
+# Expected mock-gateway log: one POST /notify request with idempotency_key
 
 # 9) Invalid transition done -> new (expect InvalidArgument)
-grpcurl -plaintext -d '{"id":"appointment-1","status":"new"}' localhost:50052 appointment.AppointmentService/UpdateAppointmentStatus
+grpcurl -plaintext -d '{"id":"PASTE_APPOINTMENT_ID_HERE","status":"new"}' localhost:50052 appointment.AppointmentService/UpdateAppointmentStatus
 
 # 10) Remote doctor missing (expect FailedPrecondition)
 grpcurl -plaintext -d '{
@@ -47,5 +58,13 @@ grpcurl -plaintext -d '{
 grpcurl -plaintext -d '{
   "title":"Emergency consultation",
   "description":"Doctor service down scenario",
-  "doctor_id":"doctor-1"
+  "doctor_id":"PASTE_DOCTOR_ID_HERE"
 }' localhost:50052 appointment.AppointmentService/CreateAppointment
+
+# Expected notification-service log line shapes:
+# {"time":"...","subject":"doctors.created","event":{"event_type":"doctors.created","occurred_at":"...","id":"doctor-...","full_name":"Dr. Aisha Seitkali","specialization":"Cardiology","email":"a.seitkali@clinic.kz"}}
+# {"time":"...","subject":"appointments.created","event":{"event_type":"appointments.created","occurred_at":"...","id":"appointment-...","title":"Initial cardiac consultation","doctor_id":"doctor-...","status":"new"}}
+# {"time":"...","subject":"appointments.status_updated","event":{"event_type":"appointments.status_updated","occurred_at":"...","id":"appointment-...","doctor_id":"doctor-...","old_status":"new","new_status":"in_progress"}}
+# {"time":"...","level":"info","job_id":"...","attempt":0,"status":"enqueued"}
+# {"time":"...","level":"info","job_id":"...","attempt":1,"status":"processing"}
+# {"time":"...","level":"info","job_id":"...","attempt":1,"status":"success"}
